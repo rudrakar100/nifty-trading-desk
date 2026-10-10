@@ -8,7 +8,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from transformers import BertTokenizer, BertForSequenceClassification
 import torch
+from streamlit_autorefresh import st_autorefresh
 
+# প্রতি ৫ মিনিট (৩০০,০০০ মিলি-সেকেন্ড) পর পর পেজ নিজে নিজেই ডেটা রিফ্রেশ করবে
+st_autorefresh(interval=300 * 1000, key="nifty_desk_autorefresh")
 st.set_page_config(page_title="Nifty 50 Pro Desk", layout="wide", page_icon="⚡")
 
 ist_tz = ZoneInfo("Asia/Kolkata")
