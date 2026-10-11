@@ -91,42 +91,84 @@ c3.metric("Dow Jones", f"{macro['dji_val']:.2f}", f"{macro['dji_pct']:+.2f}%")
 c4.metric("India VIX", f"{macro['vix']:.2f}")
 
 # ==========================================
-# 2. Key Movers (Heavyweights Score: -1 to +1)
+# 2. Key Movers: Indices & Heavyweights Live Prices
 # ==========================================
-st.subheader("🏛️ 2. Heavyweights Alignment (Reliance & HDFCBANK)")
+st.subheader("🏛️ 2. Live Indices & Heavyweights Alignment")
 
-@st.cache_data(ttl=120)
-def get_heavyweights_data():
-    hw_tickers = ["RELIANCE.NS", "HDFCBANK.NS"]
-    data = yf.download(hw_tickers, period="1d", interval="5m", auto_adjust=False, progress=False)
+@st.cache_data(ttl=60)
+def get_live_market_tickers():
+    symbols = {
+        "Nifty 50": "^NSEI",
+        "Bank Nifty": "^NSEBANK",
+        "Reliance Industries": "RELIANCE.NS",
+        "HDFC Bank": "HDFCBANK.NS"
+    }
+    
+    results = {}
+    data = yf.download(list(symbols.values()), period="1d", interval="5m", auto_adjust=False, progress=False)
     close_data = data['Close']
-    rel_close = close_data['RELIANCE.NS'].dropna()
-    hdfc_close = close_data['HDFCBANK.NS'].dropna()
 
-    if len(rel_close) < 2 or len(hdfc_close) < 2:
-        return 0, 0.0, 0.0, 0.0, 0.0
+    for name, sym in symbols.items():
+        try:
+            s_close = close_data[sym].dropna()
+            if len(s_close) >= 2:
+                curr_p = get_scalar(s_close.iloc[-1])
+                first_p = get_scalar(s_close.iloc[0])
+                chg_pct = ((curr_p - first_p) / first_p) * 100
+                results[name] = {"price": curr_p, "change": chg_pct}
+            else:
+                results[name] = {"price": 0.0, "change": 0.0}
+        except Exception:
+            results[name] = {"price": 0.0, "change": 0.0}
 
-    rel_p = get_scalar(rel_close.iloc[-1])
-    rel_first = get_scalar(rel_close.iloc[0])
-    rel_chg = ((rel_p - rel_first) / rel_first) * 100
-
-    hdfc_p = get_scalar(hdfc_close.iloc[-1])
-    hdfc_first = get_scalar(hdfc_close.iloc[0])
-    hdfc_chg = ((hdfc_p - hdfc_first) / hdfc_first) * 100
-
+    # Heavyweight alignment score
+    rel_chg = results["Reliance Industries"]["change"]
+    hdfc_chg = results["HDFC Bank"]["change"]
+    
     hw_score = 0
     if rel_chg > 0.3 and hdfc_chg > 0.3:
         hw_score = 1
     elif rel_chg < -0.3 and hdfc_chg < -0.3:
         hw_score = -1
 
-    return hw_score, rel_p, rel_chg, hdfc_p, hdfc_chg
+    return results, hw_score
 
-hw_score, rel_p, rel_chg, hdfc_p, hdfc_chg = get_heavyweights_data()
+live_data, hw_score = get_live_market_tickers()
 
-h1, h2 = st.columns(2)
-h1.metric("Reliance Industries", f"₹{rel_p:.2f}", f"{rel_chg:+.2f}% (Intraday)")
-h2.metric("HDFC Bank", f"₹{hdfc_p:.2f}", f"{hdfc_chg:+.2f}% (Intraday)")
+# ৪টি কলামে পাশাপাশি ডিসপ্লে
+col_nifty, col_bank, col_rel, col_hdfc = st.columns(4)
+
+col_nifty.metric(
+    "NIFTY 50", 
+    f"₹{live_data['Nifty 50']['price']:,.2f}", 
+    f"{live_data['Nifty 50']['change']:+.2f}% (Today)"
+)
+
+col_bank.metric(
+    "BANK NIFTY", 
+    f"₹{live_data['Bank Nifty']['price']:,.2f}", 
+    f"{live_data['Bank Nifty']['change']:+.2f}% (Today)"
+)
+
+col_rel.metric(
+    "Reliance Industries", 
+    f"₹{live_data['Reliance Industries']['price']:,.2f}", 
+    f"{live_data['Reliance Industries']['change']:+.2f}% (Intraday)"
+)
+
+col_hdfc.metric(
+    "HDFC Bank", 
+    f"₹{live_data['HDFC Bank']['price']:,.2f}", 
+    f"{live_data['HDFC Bank']['change']:+.2f}% (Intraday)"
+)
+
+# Alignment Status
+if hw_score == 1:
+    st.success("🟢 **Heavyweights Status:** Reliance ও HDFC Bank উভয়ই ঊর্ধ্বমুখী (Bullish Alignment)")
+elif hw_score == -1:
+    st.error("🔴 **Heavyweights Status:** Reliance ও HDFC Bank উভয়ই নিম্নমুখী (Bearish Pressure)")
+else:
+    st.info("⚪ **Heavyweights Status:** Mixed / Sideways Movement")
 
 # ==========================================
 # 3. Nifty Technicals (Tech Score: -1 to +1)
@@ -173,7 +215,7 @@ def get_nifty_technicals():
 tech = get_nifty_technicals()
 
 # ==========================================
-# 4. Total Confluence Engine (+2/-2 Logic)
+# 4. Total Confluence Engine (+2 / -2 Logic)
 # ==========================================
 st.subheader("🎯 3. Multi-Factor Confluence Signal (+2 / -2)")
 
@@ -210,7 +252,7 @@ elif total_confluence <= -2:
 else:
     st.info(
         f"⚖️ **Market Neutral / Choppy Range (Score: {total_confluence})**\n\n"
-        f"ম্যাক্রো, টেকনিক্যাল ও হেভিওয়েট একে অপরের সাথে পুরোপুরি অ্যালাইন নয়। কোনো ফেক ট্রেড না নিয়ে অপেক্ষা করুন।"
+        f"ম্যাক্রো, টেকনিক্যাল ও হেভিওয়েট একে অপরের সাথে পুরোপুরি একমুখী নয়। সাইডওয়েজ মার্কেটে ফেক সিগন্যাল এড়াতে অপেক্ষা করুন।"
     )
 
 # ==========================================
