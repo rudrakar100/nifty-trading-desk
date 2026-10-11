@@ -3,6 +3,7 @@ import feedparser
 import urllib.parse
 import re
 import pandas as pd
+import numpy as np
 import yfinance as yf
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -10,7 +11,7 @@ from transformers import BertTokenizer, BertForSequenceClassification
 import torch
 from streamlit_autorefresh import st_autorefresh
 
-# প্রতি ৫ মিনিট (৩০০,০০০ মিলি-সেকেন্ড) পর পর পেজ নিজে নিজেই ডেটা রিফ্রেশ করবে
+# প্রতি ৫ মিনিট (৩০০,০০০ মিলি-সেকেন্ড) পর পর পেজ নিজে নিজেই রিফ্রেশ হবে
 st_autorefresh(interval=300 * 1000, key="nifty_desk_autorefresh")
 st.set_page_config(page_title="Nifty 50 Pro Desk", layout="wide", page_icon="⚡")
 
@@ -20,7 +21,9 @@ now_ist = datetime.now(ist_tz)
 st.title("⚡ NIFTY 50 REAL-TIME TRADING DESK")
 st.caption(f"Last Updated: {now_ist.strftime('%d-%b-%Y | %I:%M %p IST')}")
 
-# AI Model Caching
+# ==========================================
+# 0. AI FinBERT Model Loader
+# ==========================================
 @st.cache_resource(show_spinner="AI FinBERT model loading...")
 def load_finbert():
     tokenizer = BertTokenizer.from_pretrained("yiyanghkust/finbert-tone")
@@ -35,34 +38,185 @@ def get_sentiment(text):
     probs = torch.nn.functional.softmax(outputs.logits, dim=-1)[0].tolist()
     return probs[1] - probs[2]
 
-# 1. Global Markets & VIX
-st.subheader("📊 1. Global Markets & Macro Metrics")
-tickers = {
-    "Dow Jones": "^DJI",
-    "Nasdaq": "^IXIC",
-    "Crude Oil": "CL=F",
-    "India VIX": "^INDIAVIX"
-}
+def get_scalar(val):
+    if isinstance(val, (pd.Series, pd.DataFrame)):
+        return float(val.values.flatten()[0])
+    return float(val)
 
-cols = st.columns(4)
-col_idx = 0
+# ==========================================
+# 1. Macro Bias & Global Metrics (Score: -1 to +1)
+# ==========================================
+st.subheader("🌐 1. Global Markets & Macro Screening")
 
-for name, sym in tickers.items():
-    try:
-        t = yf.Ticker(sym)
-        hist = t.history(period="2d")
-        if len(hist) >= 2:
-            prev = hist['Close'].iloc[-2]
-            curr = hist['Close'].iloc[-1]
-            chg = ((curr - prev) / prev) * 100
-            with cols[col_idx]:
-                st.metric(label=name, value=f"{curr:.2f}", delta=f"{chg:+.2f}%")
-            col_idx += 1
-    except Exception:
-        pass
+@st.cache_data(ttl=300)
+def get_macro_data():
+    tickers = ["DX-Y.NYB", "BZ=F", "^DJI", "^IXIC", "^INDIAVIX"]
+    data = yf.download(tickers, period="5d", interval="1d", auto_adjust=False, progress=False)
+    close_data = data['Close']
+    
+    dxy_close = close_data['DX-Y.NYB'].dropna()
+    crude_close = close_data['BZ=F'].dropna()
+    dji_close = close_data['^DJI'].dropna()
+    nasdaq_close = close_data['^IXIC'].dropna()
+    vix_close = close_data['^INDIAVIX'].dropna()
 
-# 2. News & Sentiment
-st.subheader("📰 2. Nifty Triggers & News")
+    dxy_pct = ((get_scalar(dxy_close.iloc[-1]) - get_scalar(dxy_close.iloc[-2])) / get_scalar(dxy_close.iloc[-2])) * 100
+    crude_pct = ((get_scalar(crude_close.iloc[-1]) - get_scalar(crude_close.iloc[-2])) / get_scalar(crude_close.iloc[-2])) * 100
+    dji_pct = ((get_scalar(dji_close.iloc[-1]) - get_scalar(dji_close.iloc[-2])) / get_scalar(dji_close.iloc[-2])) * 100
+    vix_val = get_scalar(vix_close.iloc[-1])
+
+    macro_score = 0
+    if dxy_pct < -0.15 and crude_pct < -0.75:
+        macro_score = 1
+    elif dxy_pct > 0.15 and crude_pct > 0.75:
+        macro_score = -1
+
+    return {
+        "score": macro_score,
+        "dxy_val": get_scalar(dxy_close.iloc[-1]),
+        "dxy_pct": dxy_pct,
+        "crude_val": get_scalar(crude_close.iloc[-1]),
+        "crude_pct": crude_pct,
+        "dji_val": get_scalar(dji_close.iloc[-1]),
+        "dji_pct": dji_pct,
+        "vix": vix_val
+    }
+
+macro = get_macro_data()
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Dollar Index (DXY)", f"{macro['dxy_val']:.2f}", f"{macro['dxy_pct']:+.2f}%")
+c2.metric("Brent Crude", f"${macro['crude_val']:.2f}", f"{macro['crude_pct']:+.2f}%")
+c3.metric("Dow Jones", f"{macro['dji_val']:.2f}", f"{macro['dji_pct']:+.2f}%")
+c4.metric("India VIX", f"{macro['vix']:.2f}")
+
+# ==========================================
+# 2. Key Movers (Heavyweights Score: -1 to +1)
+# ==========================================
+st.subheader("🏛️ 2. Heavyweights Alignment (Reliance & HDFCBANK)")
+
+@st.cache_data(ttl=120)
+def get_heavyweights_data():
+    hw_tickers = ["RELIANCE.NS", "HDFCBANK.NS"]
+    data = yf.download(hw_tickers, period="1d", interval="5m", auto_adjust=False, progress=False)
+    close_data = data['Close']
+    rel_close = close_data['RELIANCE.NS'].dropna()
+    hdfc_close = close_data['HDFCBANK.NS'].dropna()
+
+    if len(rel_close) < 2 or len(hdfc_close) < 2:
+        return 0, 0.0, 0.0, 0.0, 0.0
+
+    rel_p = get_scalar(rel_close.iloc[-1])
+    rel_first = get_scalar(rel_close.iloc[0])
+    rel_chg = ((rel_p - rel_first) / rel_first) * 100
+
+    hdfc_p = get_scalar(hdfc_close.iloc[-1])
+    hdfc_first = get_scalar(hdfc_close.iloc[0])
+    hdfc_chg = ((hdfc_p - hdfc_first) / hdfc_first) * 100
+
+    hw_score = 0
+    if rel_chg > 0.3 and hdfc_chg > 0.3:
+        hw_score = 1
+    elif rel_chg < -0.3 and hdfc_chg < -0.3:
+        hw_score = -1
+
+    return hw_score, rel_p, rel_chg, hdfc_p, hdfc_chg
+
+hw_score, rel_p, rel_chg, hdfc_p, hdfc_chg = get_heavyweights_data()
+
+h1, h2 = st.columns(2)
+h1.metric("Reliance Industries", f"₹{rel_p:.2f}", f"{rel_chg:+.2f}% (Intraday)")
+h2.metric("HDFC Bank", f"₹{hdfc_p:.2f}", f"{hdfc_chg:+.2f}% (Intraday)")
+
+# ==========================================
+# 3. Nifty Technicals (Tech Score: -1 to +1)
+# ==========================================
+@st.cache_data(ttl=120)
+def get_nifty_technicals():
+    nifty = yf.download("^NSEI", period="5d", interval="15m", auto_adjust=False, progress=False)
+    daily_nifty = yf.download("^NSEI", period="5d", interval="1d", auto_adjust=False, progress=False)
+
+    pdh = get_scalar(daily_nifty['High'].iloc[-2])
+    pdl = get_scalar(daily_nifty['Low'].iloc[-2])
+
+    close = nifty['Close'].squeeze()
+    high = nifty['High'].squeeze()
+    low = nifty['Low'].squeeze()
+
+    ema_20 = close.ewm(span=20, adjust=False).mean()
+    ema_50 = close.ewm(span=50, adjust=False).mean()
+
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = get_scalar(tr.rolling(14).mean().iloc[-1])
+
+    c_price = get_scalar(close.iloc[-1])
+    c_ema20 = get_scalar(ema_20.iloc[-1])
+    c_ema50 = get_scalar(ema_50.iloc[-1])
+
+    tech_score = 0
+    if c_price > pdh and c_price > c_ema20 > c_ema50:
+        tech_score = 1
+    elif c_price < pdl and c_price < c_ema20 < c_ema50:
+        tech_score = -1
+
+    return {
+        "price": round(c_price, 2),
+        "pdh": round(pdh, 2),
+        "pdl": round(pdl, 2),
+        "atr": round(atr, 2),
+        "score": tech_score
+    }
+
+tech = get_nifty_technicals()
+
+# ==========================================
+# 4. Total Confluence Engine (+2/-2 Logic)
+# ==========================================
+st.subheader("🎯 3. Multi-Factor Confluence Signal (+2 / -2)")
+
+total_confluence = macro['score'] + hw_score + tech['score']
+
+t1, t2, t3, t4 = st.columns(4)
+t1.metric("Nifty Spot", f"₹{tech['price']}")
+t2.metric("Previous Day High (PDH)", f"₹{tech['pdh']}")
+t3.metric("Previous Day Low (PDL)", f"₹{tech['pdl']}")
+t4.metric("Confluence Score", f"{total_confluence} / 3", help="Macro (+1/-1) + Heavyweight (+1/-1) + Technical (+1/-1)")
+
+if total_confluence >= 2:
+    sl = round(tech['price'] - (1.5 * tech['atr']), 2)
+    risk_unit = tech['price'] - sl
+    tgt = round(tech['price'] + (2.0 * risk_unit), 2)
+    st.success(
+        f"🟢 **HIGH CONFLUENCE LONG SETUP (SCORE: {total_confluence})**\n\n"
+        f"• **Entry Price:** ₹{tech['price']}\n\n"
+        f"• **Stop Loss:** ₹{sl} (~{round(1.5 * tech['atr'], 1)} pts)\n\n"
+        f"• **Target (1:2):** ₹{tgt}\n\n"
+        f"• **Reasons:** Breakout above PDH + Weak DXY/Crude + Reliance & HDFC Bullish"
+    )
+elif total_confluence <= -2:
+    sl = round(tech['price'] + (1.5 * tech['atr']), 2)
+    risk_unit = sl - tech['price']
+    tgt = round(tech['price'] - (2.0 * risk_unit), 2)
+    st.error(
+        f"🔴 **HIGH CONFLUENCE SHORT SETUP (SCORE: {total_confluence})**\n\n"
+        f"• **Short Entry:** ₹{tech['price']}\n\n"
+        f"• **Stop Loss:** ₹{sl} (~{round(1.5 * tech['atr'], 1)} pts)\n\n"
+        f"• **Target (1:2):** ₹{tgt}\n\n"
+        f"• **Reasons:** Breakdown below PDL + Strong DXY/Crude + Reliance & HDFC Bearish"
+    )
+else:
+    st.info(
+        f"⚖️ **Market Neutral / Choppy Range (Score: {total_confluence})**\n\n"
+        f"ম্যাক্রো, টেকনিক্যাল ও হেভিওয়েট একে অপরের সাথে পুরোপুরি অ্যালাইন নয়। কোনো ফেক ট্রেড না নিয়ে অপেক্ষা করুন।"
+    )
+
+# ==========================================
+# 5. News & Sentiment Analysis
+# ==========================================
+st.subheader("📰 4. Nifty Triggers & News")
 nifty_queries = [
     '("GIFT Nifty" OR "SGX Nifty") when:1d',
     '("pre-market" OR "morning cues" OR "opening bell") (Nifty OR Sensex) when:1d',
@@ -106,8 +260,10 @@ if not df.empty:
 else:
     st.info("No fresh trigger news found.")
 
-# 3. Opening Prediction
-st.subheader("🎯 3. Nifty Opening Outlook")
+# ==========================================
+# 6. Opening Prediction
+# ==========================================
+st.subheader("🎯 5. Nifty Opening Outlook")
 if predicted_points:
     avg_gap = sum(predicted_points) / len(predicted_points)
     if avg_gap >= 70:
