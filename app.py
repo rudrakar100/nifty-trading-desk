@@ -5,15 +5,16 @@ import re
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from transformers import BertTokenizer, BertForSequenceClassification
 import torch
 from streamlit_autorefresh import st_autorefresh
 
-# প্রতি ৫ মিনিট (৩০০,০০০ মিলি-সেকেন্ড) পর পর পেজ নিজে নিজেই রিফ্রেশ হবে
+# Streamlit page config must be the first Streamlit command
 st.set_page_config(page_title="Nifty 50 Pro Desk", layout="wide", page_icon="⚡")
+
+# প্রতি ৫ মিনিট (৩০০,০০০ মিলি-সেকেন্ড) পর পর পেজ নিজে নিজেই রিফ্রেশ হবে
 st_autorefresh(interval=300 * 1000, key="nifty_desk_autorefresh")
 
 ist_tz = ZoneInfo("Asia/Kolkata")
@@ -29,21 +30,33 @@ st.caption(f"Last Updated: {now_ist.strftime('%d-%b-%Y | %I:%M %p IST')}")
 def load_finbert():
     tokenizer = BertTokenizer.from_pretrained("yiyanghkust/finbert-tone")
     model = BertForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
+    model.eval()
     return tokenizer, model
 
-tokenizer, model = load_finbert()
+try:
+    tokenizer, model = load_finbert()
+    FINBERT_READY = True
+except Exception as e:
+    tokenizer, model = None, None
+    FINBERT_READY = False
+    st.warning(f"FinBERT model load হয়নি। News sentiment আপাতত neutral থাকবে। Details: {e}")
 
 def get_sentiment(text):
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
-    outputs = model(**inputs)
-    probs = torch.nn.functional.softmax(outputs.logits, dim=-1)[0].tolist()
-    return probs[1] - probs[2]
+    if not FINBERT_READY:
+        return 0.0
+    try:
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)[0].tolist()
+        return float(probs[1] - probs[2])
+    except Exception:
+        return 0.0
 
 def get_scalar(val):
     if isinstance(val, (pd.Series, pd.DataFrame)):
         return float(val.values.flatten()[0])
     return float(val)
-
 
 # ==========================================
 # 1. Macro Bias & Global Metrics (Score: -1 to +1)
@@ -81,16 +94,3 @@ def get_macro_data():
         "crude_pct": crude_pct,
         "dji_val": get_scalar(dji_close.iloc[-1]),
         "dji_pct": dji_pct,
-        "vix": vix_val
-    }
-
-macro = get_macro_data()
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Dollar Index (DXY)", f"{macro['dxy_val']:.2f}", f"{macro['dxy_pct']:+.2f}%")
-c2.metric("Brent Crude", f"${macro['crude_val']:.2f}", f"{macro['crude_pct']:+.2f}%")
-c3.metric("Dow Jones", f"{macro['dji_val']:.2f}", f"{macro['dji_pct']:+.2f}%")
-c4.metric("India VIX", f"{macro['vix']:.2f}")
-
-# ==========================================
-# 2. Key Movers: Indices & Heavyweights Live Prices
