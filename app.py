@@ -46,51 +46,51 @@ def get_scalar(val):
 
 
 # ==========================================
-# PRE-MARKET LEVEL ENGINE (EOD -> NEXT SESSION)
+# 1. Macro Bias & Global Metrics (Score: -1 to +1)
 # ==========================================
-import requests
+st.subheader("🌐 1. Global Markets & Macro Screening")
 
-st.subheader("🧭 6. Next-Day Important Levels (EOD Preparation)")
-st.caption("এই অংশটি সম্পূর্ণ হওয়া daily/15m/5m candles এবং সর্বশেষ উপলব্ধ NIFTY option-chain snapshot থেকে সম্ভাব্য zones তৈরি করে।")
+@st.cache_data(ttl=300)
+def get_macro_data():
+    tickers = ["DX-Y.NYB", "BZ=F", "^DJI", "^IXIC", "^INDIAVIX"]
+    data = yf.download(tickers, period="5d", interval="1d", auto_adjust=False, progress=False)
+    close_data = data['Close']
+    
+    dxy_close = close_data['DX-Y.NYB'].dropna()
+    crude_close = close_data['BZ=F'].dropna()
+    dji_close = close_data['^DJI'].dropna()
+    nasdaq_close = close_data['^IXIC'].dropna()
+    vix_close = close_data['^INDIAVIX'].dropna()
 
-@st.cache_data(ttl=900, show_spinner=False)
-def get_nifty_level_data():
-    daily = yf.download("^NSEI", period="1y", interval="1d", auto_adjust=False, progress=False)
-    h1 = yf.download("^NSEI", period="60d", interval="1h", auto_adjust=False, progress=False)
-    m15 = yf.download("^NSEI", period="60d", interval="15m", auto_adjust=False, progress=False)
-    m5 = yf.download("^NSEI", period="5d", interval="5m", auto_adjust=False, progress=False)
-    return daily, h1, m15, m5
+    dxy_pct = ((get_scalar(dxy_close.iloc[-1]) - get_scalar(dxy_close.iloc[-2])) / get_scalar(dxy_close.iloc[-2])) * 100
+    crude_pct = ((get_scalar(crude_close.iloc[-1]) - get_scalar(crude_close.iloc[-2])) / get_scalar(crude_close.iloc[-2])) * 100
+    dji_pct = ((get_scalar(dji_close.iloc[-1]) - get_scalar(dji_close.iloc[-2])) / get_scalar(dji_close.iloc[-2])) * 100
+    vix_val = get_scalar(vix_close.iloc[-1])
 
-def clean_ohlc(df):
-    if df is None or df.empty:
-        return pd.DataFrame()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    needed = ["Open", "High", "Low", "Close"]
-    out = df[[c for c in needed if c in df.columns]].copy()
-    for c in out.columns:
-        out[c] = pd.to_numeric(out[c], errors="coerce")
-    return out.dropna()
+    macro_score = 0
+    if dxy_pct < -0.15 and crude_pct < -0.75:
+        macro_score = 1
+    elif dxy_pct > 0.15 and crude_pct > 0.75:
+        macro_score = -1
 
-def detect_fvg(df, limit=8):
-    """Three-candle imbalance zones. Uses completed candles supplied to this function."""
-    d = clean_ohlc(df)
-    zones = []
-    if len(d) < 3:
-        return zones
-    for i in range(2, len(d)):
-        a, c = d.iloc[i-2], d.iloc[i]
-        if float(a["High"]) < float(c["Low"]):
-            zones.append({"Type": "Bullish FVG", "Low": float(a["High"]),
-                          "High": float(c["Low"]), "Time": str(d.index[i])})
-        elif float(a["Low"]) > float(c["High"]):
-            zones.append({"Type": "Bearish FVG", "Low": float(c["High"]),
-                          "High": float(a["Low"]), "Time": str(d.index[i])})
-    return zones[-limit:][::-1]
+    return {
+        "score": macro_score,
+        "dxy_val": get_scalar(dxy_close.iloc[-1]),
+        "dxy_pct": dxy_pct,
+        "crude_val": get_scalar(crude_close.iloc[-1]),
+        "crude_pct": crude_pct,
+        "dji_val": get_scalar(dji_close.iloc[-1]),
+        "dji_pct": dji_pct,
+        "vix": vix_val
+    }
 
-def detect_order_blocks(df, limit=6):
-    """
-    Heuristic OB: last opposite candle before a >=1.2 ATR displacement
-    that closes beyond the previous candle's local 5-bar extreme.
-    This is a rule-based approximation, not institutional order-flow data.
-    """
+macro = get_macro_data()
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Dollar Index (DXY)", f"{macro['dxy_val']:.2f}", f"{macro['dxy_pct']:+.2f}%")
+c2.metric("Brent Crude", f"${macro['crude_val']:.2f}", f"{macro['crude_pct']:+.2f}%")
+c3.metric("Dow Jones", f"{macro['dji_val']:.2f}", f"{macro['dji_pct']:+.2f}%")
+c4.metric("India VIX", f"{macro['vix']:.2f}")
+
+# ==========================================
+# 2. Key Movers: Indices & Heavyweights Live Prices
