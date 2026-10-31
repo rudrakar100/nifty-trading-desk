@@ -139,26 +139,26 @@ live_data, hw_score = get_live_market_tickers()
 col_nifty, col_bank, col_rel, col_hdfc = st.columns(4)
 
 col_nifty.metric(
-    "NIFTY 50",
-    f"₹{live_data['Nifty 50']['price']:,.2f}",
+    "NIFTY 50", 
+    f"₹{live_data['Nifty 50']['price']:,.2f}", 
     f"{live_data['Nifty 50']['change']:+.2f}% (Today)"
 )
 
 col_bank.metric(
-    "BANK NIFTY",
-    f"₹{live_data['Bank Nifty']['price']:,.2f}",
+    "BANK NIFTY", 
+    f"₹{live_data['Bank Nifty']['price']:,.2f}", 
     f"{live_data['Bank Nifty']['change']:+.2f}% (Today)"
 )
 
 col_rel.metric(
-    "Reliance Industries",
-    f"₹{live_data['Reliance Industries']['price']:,.2f}",
+    "Reliance Industries", 
+    f"₹{live_data['Reliance Industries']['price']:,.2f}", 
     f"{live_data['Reliance Industries']['change']:+.2f}% (Intraday)"
 )
 
 col_hdfc.metric(
-    "HDFC Bank",
-    f"₹{live_data['HDFC Bank']['price']:,.2f}",
+    "HDFC Bank", 
+    f"₹{live_data['HDFC Bank']['price']:,.2f}", 
     f"{live_data['HDFC Bank']['change']:+.2f}% (Intraday)"
 )
 
@@ -315,7 +315,9 @@ if predicted_points:
         st.info(f"⚪ **FLAT / MILD GAP:** Approx **{avg_gap:+.0f} points**")
 else:
     st.write("No specific point headline found.")
-    # ==========================================
+
+
+# ==========================================
 # 4. AI Market Prediction & Research Engine
 # ==========================================
 st.subheader("🧠 4. Dedicated AI Market Research & Prediction Desk")
@@ -379,8 +381,7 @@ for q in nifty_queries:
                 "FinBERT Score": round(score, 3),
                 "Action Bias": "🟢 BUY" if score > 0.20 else ("🔴 SELL" if score < -0.20 else "⚪ NEUTRAL")
             })
-
-# --- AI সামগ্রিক গবেষণা ও দিনের মার্কেট ডিরেকশন কার্ড ---
+            # --- AI সামগ্রিক গবেষণা ও দিনের মার্কেট ডিরেকশন কার্ড ---
 avg_sentiment = np.mean(all_sentiment_scores) if all_sentiment_scores else 0.0
 avg_gap = (sum(predicted_points) / len(predicted_points)) if predicted_points else 0.0
 
